@@ -1,6 +1,7 @@
 """A9, the polite scraper. Books to Scrape, first three catalogue pages only."""
 
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -54,6 +55,11 @@ def fetch(url: str, filename: str) -> str:
     if response.status_code != 200:
         raise FetchFailed(f"{url}: HTTP {response.status_code}")
 
+    # The server sends "text/html" with no charset, so requests would fall back to
+    # ISO-8859-1 and turn every price into "Â£51.77". The page itself declares UTF-8.
+    if "charset" not in response.headers.get("content-type", "").lower():
+        response.encoding = response.apparent_encoding
+
     html = response.text
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     path.write_text(html, encoding="utf-8")
@@ -64,9 +70,20 @@ def fetch(url: str, filename: str) -> str:
     return html
 
 
-def discover() -> list[str]:
-    """Walk the catalogue's own next links and collect every book URL they offer."""
-    found: list[str] = []
+def fetched_at(filename: str) -> str:
+    """When this copy actually arrived, not when we happened to read it again."""
+    when = datetime.fromtimestamp((CACHE_DIR / filename).stat().st_mtime, timezone.utc)
+    return when.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def cache_name(url: str) -> str:
+    """books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html -> a slug."""
+    return f"book-{url.rstrip('/').split('/')[-2]}.html"
+
+
+def discover() -> list[tuple[str, str]]:
+    """Walk the catalogue's own next links. Returns (book URL, catalogue page)."""
+    found: list[tuple[str, str]] = []
     page_url: str | None = START_URL
     pages = 0
 
@@ -76,16 +93,61 @@ def discover() -> list[str]:
 
         for link in soup.select("article.product_pod h3 a"):
             # Relative hrefs like ../book/index.html need a base, never string glue.
-            found.append(urljoin(page_url, link["href"]))
+            found.append((urljoin(page_url, link["href"]), page_url))
 
         # Let the site say where page 2 is rather than guessing the URL shape.
         next_link = soup.select_one("li.next a")
         page_url = urljoin(page_url, next_link["href"]) if next_link else None
 
-    unique = list(dict.fromkeys(found))  # keeps first-seen order, drops repeats
+    unique = list(dict.fromkeys(found))
     print(f"catalogue_pages={pages} discovered={len(found)} unique_urls={len(unique)}")
     return unique
 
 
+def extract(html: str, url: str, source_page: str, when: str) -> dict:
+    """Turn one book page into a raw record. Every key is present, even when empty."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Aim at the product area. "The first thing that looks like a price" betrays you
+    # the day the page grows a second one.
+    product = soup.select_one("div.product_main")
+    if product is None:
+        raise FetchFailed(f"{url}: no product area on the page")
+
+    rating = product.select_one("p.star-rating")
+    # The star count lives in the class, as in <p class="star-rating Three">.
+    rating_text = rating["class"][-1] if rating else None
+
+    # The description is the paragraph that follows the product description heading.
+    # Some books have none, and an absent description is null, never invented text.
+    description = soup.select_one("#product_description ~ p")
+
+    return {
+        "title": product.h1.get_text(strip=True),
+        "product_url": url,
+        "price_text": product.select_one("p.price_color").get_text(strip=True),
+        "availability_text": product.select_one("p.availability").get_text(strip=True),
+        "rating_text": rating_text,
+        "description": description.get_text(strip=True) if description else None,
+        "source_page": source_page,
+        "fetched_at": when,
+    }
+
+
+def scrape() -> list[dict]:
+    """Fetch every discovered book page and pull its raw fields out."""
+    records = []
+    for url, source_page in discover():
+        filename = cache_name(url)
+        html = fetch(url, filename)
+        records.append(extract(html, url, source_page, fetched_at(filename)))
+
+    print(f"detail_pages={len(records)}")
+    return records
+
+
 if __name__ == "__main__":
-    discover()
+    import json
+
+    books = scrape()
+    print(json.dumps(books[0], indent=2, ensure_ascii=False))
