@@ -1,5 +1,6 @@
 """A9, the polite scraper. Books to Scrape, first three catalogue pages only."""
 
+import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,6 +8,9 @@ from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
+from pydantic import ValidationError
+
+from schema import Book, normalise
 
 BASE_URL = "https://books.toscrape.com/"
 START_URL = "https://books.toscrape.com/catalogue/page-1.html"
@@ -27,6 +31,7 @@ TIMEOUT_SECONDS = 10
 DELAY_SECONDS = 0.5
 
 CACHE_DIR = Path(__file__).resolve().parent.parent / "cache"
+OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
 
 
 class FetchFailed(Exception):
@@ -146,8 +151,45 @@ def scrape() -> list[dict]:
     return records
 
 
-if __name__ == "__main__":
-    import json
+def validate(records: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split the raw records into the ones safe to store and the ones that are not.
 
-    books = scrape()
-    print(json.dumps(books[0], indent=2, ensure_ascii=False))
+    The product URL is each record's identity, so a book seen twice is stored once.
+    """
+    good: dict[str, dict] = {}
+    bad: list[dict] = []
+
+    for raw in records:
+        try:
+            book = Book.model_validate(normalise(raw))
+        except ValidationError as exc:
+            # Pydantic's default text is a paragraph per problem. errors.json is meant
+            # to be read, so keep one short line per bad field.
+            reason = "; ".join(
+                f"{'.'.join(str(part) for part in err['loc'])}: {err['msg']}"
+                for err in exc.errors()
+            )
+            bad.append({"product_url": raw.get("product_url"), "reason": reason})
+            continue
+        except ValueError as exc:
+            bad.append({"product_url": raw.get("product_url"), "reason": str(exc)})
+            continue
+        good[book.product_url] = book.model_dump()
+
+    return list(good.values()), bad
+
+
+def store(good: list[dict], bad: list[dict]) -> None:
+    """Write both files fresh, so a second run replaces the results instead of adding."""
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    for name, payload in (("books.json", good), ("errors.json", bad)):
+        path = OUTPUT_DIR / name
+        path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        print(f"wrote {path.name}  {len(payload)} records")
+
+
+if __name__ == "__main__":
+    good, bad = validate(scrape())
+    store(good, bad)
