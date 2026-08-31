@@ -17,6 +17,10 @@ python3.11 -m venv .venv
 That one command does the whole pipeline and writes three files into `output/`. A cold run
 takes about a minute, almost all of it the 0.5 second pause between requests.
 
+Timed from a fresh clone of this repo on 31 August 2026: 63 seconds from `git clone` to
+`output/books.json` holding 60 records, including creating the virtualenv and installing the
+three dependencies.
+
 The tests need no network and no server:
 
 ```bash
