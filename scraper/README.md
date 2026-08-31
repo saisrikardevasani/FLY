@@ -198,3 +198,114 @@ They earned their place: an early version of the cache filename helper turned an
 a slash into `book-catalogue.html`, which would have given every book the same cache file and
 served the wrong page from it. The test comparing two different books' cache names is what
 found it.
+
+## AI vs me
+
+I built stages 0 to 5 by hand first, which is the only reason this section is a code review
+rather than a magic show. The prompt was written from memory before anything was generated, the
+generated code lives in [`ai-version/`](ai-version/) and has not been edited since, and every
+line below comes from running both, not from reading them.
+
+### The prompt
+
+[`ai-version/prompt-v1.md`](ai-version/prompt-v1.md) holds it in full. It names the target and
+the three-page scope, the eight raw fields, the user-agent, the timeout, the half-second delay,
+the cache, the Pydantic model, the errors.json rule, the no-duplicates rule, the retry rules,
+the run report, and the injected broken URL.
+
+### Checkpoint results
+
+Every checkpoint from stages 2 to 5, fired at all three versions:
+
+| Checkpoint | Mine | AI v1 | AI v2 |
+| --- | --- | --- | --- |
+| 3 catalogue pages, 60 unique book URLs | 60 | 60 | 60 |
+| `books.json` holds 60 valid records | **60** | **0** | **60** |
+| records rejected into `errors.json` | 0 | **60** | 0 |
+| rerun gives 60, not 120 | 60 | stable | 60 |
+| rerun reads from cache | 63 hits, 0.22s | 63 hits, 0.21s | 63 hits, 0.21s |
+| one broken page is skipped, run finishes | `failed_pages: 1` | `failed_pages: 1` | `failed_pages: 1` |
+| the 404 is not retried | no retry | no retry | no retry |
+
+The last row was checked by timing rather than by reading the code: all three finish the
+injected-failure run in 0.53 seconds, and a retry would have added at least a second of sleep.
+
+### What the AI got wrong
+
+**It collected nothing, and its own report said so.** v1 fetched all 63 pages and validated 0
+of 60 records. The reason, from its `errors.json`:
+
+```
+could not convert string to float: 'Â51.77'
+```
+
+The site sends `Content-Type: text/html` with no charset, so requests falls back to ISO-8859-1
+and `£51.77` arrives as `Â£51.77`. Its price parser stripped the `£` and handed `Â51.77` to
+`float()`. Two reasonable-looking decisions, one dead run.
+
+Worth saying clearly: this is the validation layer working. Nothing wrong reached `books.json`,
+and the run report said `invalid_records: 60` rather than quietly writing 60 broken rows. A
+scraper that had skipped the schema would have stored `Â£51.77` in production and nobody would
+have found out for weeks.
+
+**Its schema accepts things that should never be stored.** Both AI versions declare the fields
+but almost no rules about them. Feeding the same four bad records to both models:
+
+| Record | AI v2 | Mine |
+| --- | --- | --- |
+| blank title | accepts | rejects |
+| `product_url` of `../book/` | accepts | rejects |
+| `description` key absent entirely | accepts | rejects |
+| `price_gbp` of `-5.0` | accepts | rejects |
+
+The relative URL is the one that matters, because `product_url` is the record's identity. A
+record keyed on `../book/` cannot be deduplicated or fetched again.
+
+**v1 recorded the wrong time.** It set `fetched_at` to `datetime.now()` at parse time, so a run
+reading entirely from cache stamped every record with today's date for pages downloaded a week
+ago. That is provenance saying something false, which is worse than provenance being absent.
+
+**Its rating was a free string.** v1 accepted whatever word sat in the class attribute. If the
+site ever ships a sixth rating, v1 stores it and moves on.
+
+### What the AI did better
+
+**Its cache naming was right and mine was not.** It builds the filename from the whole URL
+path, so `/catalogue/thirst_946/` and `/catalogue/thirst_946/index.html` both land somewhere
+sensible. My first version took the second-to-last path segment, which turned any URL ending in
+a slash into `book-catalogue.html`, one filename shared by every book on the site. Its approach
+never had that failure mode. Mine only got there because a test I wrote comparing two books'
+cache names found it.
+
+**It checked `seen` before fetching, not after.** A duplicate URL costs it nothing, because the
+skip happens before the request. Mine dedupes at discovery and again at validation, which
+reaches the same answer with one more pass over the data.
+
+### What my prompt forgot to say
+
+Four things, and the first one cost the whole run:
+
+1. **The charset.** I never said the site declares UTF-8 in the page while sending no charset in
+   the header. I did not think of it because I had already fixed it in my own code hours
+   earlier, which is exactly the knowledge that does not survive into a prompt.
+2. **What "validate" means.** I said "define the record as a Pydantic model" and got a model
+   with types and no rules. Field names are not constraints. I should have said blank titles
+   are invalid, URLs must be absolute, and the rating is a closed list.
+3. **That `fetched_at` is provenance.** I asked for "a UTC timestamp", which is exactly what I
+   got, and it was the wrong timestamp.
+4. **How to parse a price.** I said turn it into a number and left the method open, so it chose
+   the fragile one.
+
+### The rematch
+
+[`ai-version/prompt-v2.md`](ai-version/prompt-v2.md) adds those four points and nothing else.
+Regenerated once as [`scraper_v2.py`](ai-version/scraper_v2.py): 60 of 60 valid on a cold run,
+0 invalid, and a broken page still skipped with `failed_pages: 1`.
+
+Comparing v2's 60 records against my 60 field by field, every field matches on every record
+except `fetched_at`, which differs because the two runs downloaded their own copies seven
+minutes apart. Same URLs, same titles, same `£51.77`, same `51.77`, same ratings.
+
+Its schema still accepts a blank title and a relative URL, because prompt v2 told it the rating
+was a closed list and forgot to say the same about everything else. The specification is the
+product. The model wrote what I asked for both times.
