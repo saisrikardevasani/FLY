@@ -5,7 +5,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -122,8 +122,15 @@ def fetched_at(filename: str) -> str:
 
 
 def cache_name(url: str) -> str:
-    """books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html -> a slug."""
-    return f"book-{url.rstrip('/').split('/')[-2]}.html"
+    """books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html -> a slug.
+
+    Take the last real path segment, ignoring index.html, so a link written with a
+    trailing slash gets the same name rather than colliding with every other book.
+    """
+    parts = [p for p in urlparse(url).path.split("/") if p and p != "index.html"]
+    if not parts:
+        raise ValueError(f"no book slug in URL: {url!r}")
+    return f"book-{parts[-1]}.html"
 
 
 def discover() -> list[tuple[str, str]]:
