@@ -1,0 +1,96 @@
+"""Everything between "the model said something" and "the API returns something".
+
+The model is an external source, so its answer is raw input. It gets parsed, checked
+against the schema, given exactly one chance to correct itself, and quarantined if it
+still fails. Nothing the model wrote reaches the caller unvalidated.
+"""
+
+import json
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+
+from pydantic import ValidationError
+
+from .client import ask, load_prompt
+from .schema import Classification
+
+QUARANTINE = Path(__file__).resolve().parent.parent.parent / "logs" / "quarantine.jsonl"
+
+# Models like to wrap JSON in a fence, and to say "Sure! Here is the JSON:" first.
+FENCE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
+
+REPAIR_INSTRUCTION = (
+    "Your previous answer was rejected for this reason. Return only corrected JSON "
+    "matching the schema, with no code fence and no commentary."
+)
+
+
+class Unusable(Exception):
+    """The model's answer could not be turned into a valid classification."""
+
+
+def extract_json(text: str) -> str:
+    """Pull the object out of whatever the model wrapped it in."""
+    fenced = FENCE.search(text)
+    if fenced:
+        text = fenced.group(1)
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise Unusable("no JSON object found in the model's answer")
+    return text[start : end + 1]
+
+
+def parse_and_validate(text: str) -> Classification:
+    """A structurally valid object with a genre we never allowed is still a failure."""
+    candidate = extract_json(text)
+    try:
+        return Classification.model_validate_json(candidate)
+    except ValidationError as exc:
+        problems = "; ".join(
+            f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()
+        )
+        raise Unusable(problems) from exc
+    except json.JSONDecodeError as exc:
+        raise Unusable(f"not valid JSON: {exc}") from exc
+
+
+def quarantine(payload: dict, raw: str, reason: str, prompt_version: str) -> None:
+    """Keep what the model actually said, so a failure can be read rather than guessed at."""
+    QUARANTINE.parent.mkdir(parents=True, exist_ok=True)
+    line = {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "prompt_version": prompt_version,
+        "input": payload,
+        "raw_output": raw,
+        "error": reason,
+    }
+    with QUARANTINE.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(line, ensure_ascii=False) + "\n")
+
+
+def classify(payload: dict, prompt_version: str = "book-genre-v1") -> tuple[Classification, int]:
+    """Ask, check, and if it failed, ask once more with the reason. Returns (result, repairs)."""
+    system = load_prompt(prompt_version)
+    raw = ask(system, payload)
+
+    try:
+        return parse_and_validate(raw), 0
+    except Unusable as first_failure:
+        reason = str(first_failure)
+
+    # One repair, and only one. It fixes most real failures; a second is throwing money
+    # at a model that has already shown it cannot do this one.
+    repair_payload = {
+        "original_input": payload,
+        "your_previous_answer": raw,
+        "why_it_was_rejected": reason,
+        "instruction": REPAIR_INSTRUCTION,
+    }
+    repaired = ask(system, repair_payload)
+
+    try:
+        return parse_and_validate(repaired), 1
+    except Unusable as second_failure:
+        quarantine(payload, repaired, str(second_failure), prompt_version)
+        raise Unusable(str(second_failure)) from second_failure
