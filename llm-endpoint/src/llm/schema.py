@@ -55,11 +55,20 @@ class Classification(BaseModel):
                                                max_length=160)]
 
 
-# Returned when LLM_STUB=1, and as the fallback when the kill switch is off. It satisfies
-# the schema, so every path through the endpoint returns the same shape.
+# Returned when LLM_STUB=1. It satisfies the schema, so every path through the endpoint
+# returns the same shape and the tests never need a model.
 STUB = Classification(
     genre="other",
     audience="adult",
     confidence=0.0,
     one_line="Stub response. No model was called.",
+)
+
+# Returned when LLM_ENABLED is not true. Deterministic, schema valid, and honest about
+# being a fallback rather than a classification.
+FALLBACK = Classification(
+    genre="other",
+    audience="adult",
+    confidence=0.0,
+    one_line="Classification is switched off, so this book was not classified.",
 )

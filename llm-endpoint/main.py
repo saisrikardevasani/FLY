@@ -10,8 +10,9 @@ from fastapi.responses import JSONResponse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
+from llm.client import ModelUnavailable  # noqa: E402
 from llm.pipeline import Unusable, classify as run_pipeline  # noqa: E402
-from llm.schema import STUB, ClassifyIn, Classification  # noqa: E402
+from llm.schema import FALLBACK, STUB, ClassifyIn, Classification  # noqa: E402
 
 load_dotenv()
 
@@ -54,9 +55,22 @@ async def classify(body: ClassifyIn) -> Classification:
     if flag("LLM_STUB", "0") == "1":
         return STUB
 
+    # The kill switch. The day the provider has an outage, or the bill spikes, or the
+    # model starts saying something embarrassing, somebody who is not me needs to turn
+    # this off without a deploy.
+    if flag("LLM_ENABLED", "true") != "true":
+        return FALLBACK
+
     payload = {"title": body.title, "description": body.description}
     try:
         result, _repairs = run_pipeline(payload)
+    except ModelUnavailable as exc:
+        # A timeout is 504: the upstream did not answer in time. Anything else that no
+        # retry can fix is 503: the model is not available right now.
+        raise HTTPException(
+            status_code=504 if exc.timed_out else 503,
+            detail=f"The classifier is unavailable: {exc}",
+        ) from exc
     except Unusable as exc:
         # Never crash, never guess a default and pretend it worked, and never hand the
         # caller the model's raw text. The contract is the schema or an honest 422.

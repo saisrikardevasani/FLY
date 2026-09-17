@@ -72,7 +72,7 @@ def quarantine(payload: dict, raw: str, reason: str, prompt_version: str) -> Non
 def classify(payload: dict, prompt_version: str = "book-genre-v1") -> tuple[Classification, int]:
     """Ask, check, and if it failed, ask once more with the reason. Returns (result, repairs)."""
     system = load_prompt(prompt_version)
-    raw = ask(system, payload)
+    raw = ask(system, payload, prompt_version)
 
     try:
         return parse_and_validate(raw), 0
@@ -87,7 +87,7 @@ def classify(payload: dict, prompt_version: str = "book-genre-v1") -> tuple[Clas
         "why_it_was_rejected": reason,
         "instruction": REPAIR_INSTRUCTION,
     }
-    repaired = ask(system, repair_payload)
+    repaired = ask(system, repair_payload, prompt_version, repairs=1)
 
     try:
         return parse_and_validate(repaired), 1
