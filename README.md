@@ -4,8 +4,8 @@ Nine assignments, built one stage at a time between 18 August and 17 September 2
 is self-contained: its own dependencies, its own README, its own tests, and a git log where every
 commit is a stage that actually worked when it was made.
 
-109 commits, one per stage, made at the point that stage actually worked. Everything here was
-run before it was written down.
+Every commit is a stage, made at the point that stage actually worked rather than reconstructed
+afterwards. Everything here was run before it was written down.
 
 ## How to read this repo
 
@@ -48,7 +48,7 @@ list to SQLite to Postgres, because every line of SQL lived in `db.py` and nowhe
 Finished with docker compose bringing up the API, Postgres and Redis together, a multi-stage
 image, and an index on the column the filter actually uses.
 
-**39 commits**, three separate AI rematches, one per assignment.
+**39 commits** across the three assignments, with a separate AI rematch for each.
 
 ## Week 4: auth
 
