@@ -1,6 +1,7 @@
 """A7, the background job. A normal API that hands slow work to a worker."""
 
 import datetime
+import pathlib
 import uuid
 
 import inngest
@@ -23,6 +24,35 @@ inngest_client = inngest.Inngest(app_id="report-api", is_production=False)
 # Reports live in memory, so a restart forgets them. That is the same lesson as A1 and
 # still not a bug: what survives a restart here is the job, not this dictionary.
 reports: dict[str, dict] = {}
+
+OUTBOX = pathlib.Path(__file__).resolve().parent / "outbox"
+
+# A done report is rubbish after this long, and taking out the rubbish is what most
+# real cron jobs actually do.
+KEEP_DONE_FOR = datetime.timedelta(minutes=10)
+
+
+def summarise(current: dict[str, dict]) -> str:
+    """One line saying where every report got to."""
+    counts = {"pending": 0, "done": 0, "failed": 0}
+    for report in current.values():
+        status = report.get("status", "pending")
+        counts[status] = counts.get(status, 0) + 1
+    return (
+        f"heartbeat: {len(current)} reports, {counts['pending']} pending, "
+        f"{counts['done']} done, {counts['failed']} failed"
+    )
+
+
+def expired(current: dict[str, dict], now: datetime.datetime) -> list[str]:
+    """Which done reports are older than KEEP_DONE_FOR."""
+    old = []
+    for report_id, report in current.items():
+        if report.get("status") != "done" or not report.get("finished_at"):
+            continue
+        if now - datetime.datetime.fromisoformat(report["finished_at"]) > KEEP_DONE_FOR:
+            old.append(report_id)
+    return old
 
 
 class ReportIn(BaseModel):
@@ -63,6 +93,12 @@ async def request_report(body: ReportIn) -> dict:
     return {"id": report_id, "status": "pending"}
 
 
+@app.get("/reports")
+async def list_reports() -> dict:
+    """The control panel: every report and where it got to."""
+    return {"count": len(reports), "reports": list(reports.values())}
+
+
 @app.get("/reports/{report_id}")
 async def get_report(report_id: str) -> dict:
     report = reports.get(report_id)
@@ -92,6 +128,7 @@ async def report_failed(ctx: inngest.Context) -> None:
     fn_id="make-report",
     trigger=inngest.TriggerEvent(event="report/requested"),
     retries=2,  # three attempts in total, so the show is short
+    concurrency=[inngest.Concurrency(limit=2)],
     on_failure=report_failed,
 )
 async def make_report(ctx: inngest.Context) -> dict:
@@ -99,10 +136,23 @@ async def make_report(ctx: inngest.Context) -> dict:
     report_id = ctx.event.data["id"]
     topic = ctx.event.data["topic"]
 
+    async def gather() -> dict:
+        """A cheap first step, so a restart has something finished to skip over."""
+        return {"topic": topic, "sources": 3}
+
+    facts = await ctx.step.run("gather-facts", gather)
+
     # Stands in for the real slow thing: an AI call, a big export, a PDF render.
     await ctx.step.sleep("do-the-slow-work", datetime.timedelta(seconds=8))
 
     async def build() -> dict:
+        # The same event delivered twice must not produce two reports. Inngest can
+        # redeliver, and a job that is not safe to run twice is a job that will one day
+        # send the same customer the same email twice.
+        existing = reports.get(report_id)
+        if existing and existing.get("status") == "done":
+            return existing
+
         # A wrong moment deserves a retry. This stands in for the oven breaking.
         if topic == "fail":
             raise RuntimeError("The report oven is broken!")
@@ -111,11 +161,16 @@ async def make_report(ctx: inngest.Context) -> dict:
             "id": report_id,
             "topic": topic,
             "status": "done",
-            "result": f"Everything worth knowing about {topic}.",
+            "result": f"Everything worth knowing about {topic}, from {facts['sources']} sources.",
             "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
         # Replace the entry rather than editing the pending one in place.
         reports[report_id] = finished
+
+        # Stands in for sending the report somewhere. Writing a file from a job is the
+        # same shape as emailing one, without needing a mail server.
+        OUTBOX.mkdir(exist_ok=True)
+        (OUTBOX / f"{report_id}.txt").write_text(finished["result"], encoding="utf-8")
         return finished
 
     return await ctx.step.run("build-report", build)
@@ -130,18 +185,24 @@ async def heartbeat(ctx: inngest.Context) -> str:
 
     Every minute is for watching it work. A real heartbeat would run daily.
     """
-    counts = {"pending": 0, "done": 0, "failed": 0}
-    for report in reports.values():
-        status = report.get("status", "pending")
-        counts[status] = counts.get(status, 0) + 1
-
-    summary = (
-        f"heartbeat: {len(reports)} reports, "
-        f"{counts['pending']} pending, {counts['done']} done, {counts['failed']} failed"
-    )
+    summary = summarise(reports)
     ctx.logger.info(summary)
     print(summary, flush=True)
     return summary
 
 
-inngest.fast_api.serve(app, inngest_client, [say_hello, make_report, heartbeat])
+@inngest_client.create_function(
+    fn_id="cleanup",
+    trigger=inngest.TriggerCron(cron="*/5 * * * *"),
+)
+async def cleanup(ctx: inngest.Context) -> str:
+    """Every five minutes, throw away reports nobody came back for."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    for report_id in expired(reports, now):
+        del reports[report_id]
+    return summarise(reports)
+
+
+inngest.fast_api.serve(
+    app, inngest_client, [say_hello, make_report, heartbeat, cleanup]
+)
