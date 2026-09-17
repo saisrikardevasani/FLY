@@ -55,7 +55,14 @@ async def stats() -> dict:
 
 
 @app.post("/classify", response_model=Classification)
-async def classify(body: ClassifyIn) -> Classification:
+def classify(body: ClassifyIn) -> Classification:
+    """A plain def, not async def, and that is deliberate.
+
+    The pipeline below is blocking: it makes a synchronous HTTP call that can take
+    seconds. In an async def it would hold the event loop for that whole time and every
+    other request, including /health, would queue behind it. FastAPI runs a sync endpoint
+    in a worker thread instead.
+    """
     # Stub mode is not a toy. It is how every later stage gets built without spending a
     # call on a typo, and how the tests run with no model on the machine at all.
     if flag("LLM_STUB", "0") == "1":

@@ -321,3 +321,117 @@ thing to have learned than a second number would have been.
 One loose end I could not explain: those failed calls gave up after about 121 seconds per
 attempt despite the client being configured with a 400 second timeout, and I did not establish
 why before stopping. Recorded here rather than tidied away.
+
+## AI vs me
+
+I built stages 0 to 5 by hand first, which is the only reason this section is a code review
+rather than a demonstration. The prompt was written from memory before anything was generated,
+the generated code lives in [`ai-version/`](ai-version/) and has not been edited since, and every
+number below came from running both against the same fake provider and the same eval set.
+
+### The prompt
+
+[`ai-version/prompt-v1.md`](ai-version/prompt-v1.md) has it in full. It names the closed genre
+list, the 400 on bad input before any model call, the prompt living in a file, stub mode, the
+parse-repair-quarantine behaviour, the 30 second timeout, which errors may be retried and which
+may not, the per-call cost log, and the kill switch.
+
+### Where they agree
+
+Given the same prompt file and the same model, the two score identically on the eval:
+**5 of 8 each**, failing the same three cases in the same way. That is worth saying first,
+because it shows what the AI got right: the closed list, the 400s, stub mode, the kill switch,
+the fence-stripping parser, the repair retry and the quarantine log all work. The quality of the
+answers is a property of the prompt, not of either implementation.
+
+The differences are all in what happens when the provider misbehaves, and they are large.
+
+### What the AI got wrong
+
+I pointed both versions at a local server that always returns HTTP 500, and counted the requests
+that actually arrived.
+
+| | Mine | AI v1 |
+| --- | --- | --- |
+| HTTP requests sent for one classification | **3** | **5** |
+| Time before answering | 3.5s | **39.0s** |
+| What the caller got | `503` + `{"error": "..."}` | `500 Internal Server Error`, plain text |
+| Endpoint crashed | no | **yes**, stack trace in the log |
+
+**It retried underneath its own retries.** The AI wrapped a three-attempt loop around a client it
+left at the SDK's default `max_retries=2`, so every attempt was itself up to three requests. One
+logical call became five real ones and took 39 seconds. This is the trap of not setting a default
+explicitly: the code says three attempts, the provider sees five, and on a metered tier you are
+billed for the difference.
+
+**A provider failure escaped as a 500.** `call_model` re-raises the underlying error and
+`classify` never catches it, so `APIConnectionError` went straight out of the route. The caller
+got `Internal Server Error` as plain text, in a different shape from every other error the API
+produces, with a stack trace in the log. My prompt said "never crash" about the parsing path and
+the AI honoured it there; I never said it about the provider path, and it did not generalise.
+
+**Its timestamps are naive local time** again, `datetime.now()` in both the call log and the
+quarantine file.
+
+### What the AI did better
+
+**Its repair uses the conversation properly.** Mine re-sends the failure as a fresh JSON payload
+in a new user message, which flattens the exchange into one turn. The AI appends the model's own
+broken answer as an `assistant` message and the complaint as the following `user` message, so the
+model sees its own output in the position it actually occupies. That is the more standard repair
+shape and it is closer to how the model was trained to read a conversation. I understand why it
+is better and I have left mine alone, because changing it now would invalidate the 7 of 8 score
+I measured, and an unmeasured improvement is not an improvement.
+
+**It found a bug in mine that I had not noticed.** See below.
+
+### The bug the comparison found in my own code
+
+While testing whether the AI blocked its event loop, I ran the same test on mine and it was
+worse:
+
+```
+baseline /health:                                   0.0004s
+AI version, /health during one classification:      3.095s
+MY version, /health during one classification:      4.416s
+```
+
+Both of us had written `async def` around a blocking call. In an async endpoint that holds the
+event loop for the whole call, so a single classification makes the entire server unresponsive:
+health checks, other classifications, everything. I had already hit this in A8 and used a plain
+`def` there so FastAPI would run it in a worker thread, and then wrote the same mistake here
+three assignments later.
+
+Fixed, and measured again: **0.0007s** for `/health` with a classification in flight.
+
+### What my prompt forgot to say
+
+1. **That the SDK retries on its own.** I specified my retry policy in detail and never said to
+   turn the built-in one off, so I got both, multiplied.
+2. **That "never crash" includes the provider.** I wrote it about parsing and validation. The
+   model did precisely what I asked and nothing more.
+3. **That every error has one shape.** I never said the failure responses had to match the
+   `{"error": ...}` shape of the successful ones, so one of them did not.
+4. **That the endpoint must not block.** It did not occur to me to say it, because I had solved
+   it in another assignment and it had stopped feeling like a decision. That is the same failure
+   mode as A8's print CSS: the things you have already internalised are exactly the things that
+   fall out of your specification.
+
+### The rematch
+
+[`ai-version/prompt-v2.md`](ai-version/prompt-v2.md) adds those four points. Regenerated once as
+[`classifier_v2.py`](ai-version/classifier_v2.py), and every gap closed:
+
+```
+AI v2 against the same always-500 provider:
+  {"error":"The classifier is unavailable: InternalServerError after 3 attempts: ..."}
+  answered [503] in 4.045650s
+  HTTP requests the provider received: 3
+  /health during a call: 0.001263s
+```
+
+Three requests instead of five, four seconds instead of thirty-nine, a clean `503` in the same
+shape as every other error instead of a crash, and a server that stays responsive. One sentence
+on what changed: naming the SDK's hidden default and the two words "never crash" applied to the
+provider turned a 39-second crash into a 4-second handled failure, which is the whole assignment
+in one diff.

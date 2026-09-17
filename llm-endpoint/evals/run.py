@@ -5,13 +5,14 @@ A number you can compare is worth more than a high number. Run it with:
 """
 
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 CASES = Path(__file__).resolve().parent / "cases.json"
-ENDPOINT = "http://localhost:8200/classify"
+ENDPOINT = os.environ.get("EVAL_ENDPOINT", "http://localhost:8200/classify")
 
 
 def call(payload: dict) -> tuple[int, dict]:
