@@ -25,7 +25,7 @@ on a responsibility it was designed not to have.
 
 ## Run it
 
-Python 3.11. From this `auth/` folder:
+Python 3.11. From this `week-04-auth/` folder:
 
 ```bash
 python3.11 -m venv .venv

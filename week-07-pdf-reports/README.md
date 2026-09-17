@@ -15,7 +15,7 @@ and loads it into `report.db`, converting the star rating from the word the site
 
 ## Run it
 
-Python 3.11. From this `pdf-report-generator/` folder:
+Python 3.11. From this `week-07-pdf-reports/` folder:
 
 ```bash
 python3.11 -m venv .venv

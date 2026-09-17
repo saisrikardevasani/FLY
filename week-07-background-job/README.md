@@ -6,7 +6,7 @@ The client never waits eight seconds.
 
 ## Run it
 
-Python 3.11, and two terminals. From this `background-job/` folder:
+Python 3.11, and two terminals. From this `week-07-background-job/` folder:
 
 ```bash
 # terminal 1, the API

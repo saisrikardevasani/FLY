@@ -8,7 +8,7 @@ Flow; Inngest executes it, one step per node.
 
 ## Run it
 
-Node 20 or newer, and two terminals. From this `decision-flow/` folder:
+Node 20 or newer, and two terminals. From this `week-07-decision-flow/` folder:
 
 ```bash
 # terminal 1, the app

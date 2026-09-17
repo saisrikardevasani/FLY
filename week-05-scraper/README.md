@@ -6,7 +6,7 @@ between real requests, and finishes each run with a report of what happened.
 
 ## Run it
 
-Python 3.11. From this `scraper/` folder:
+Python 3.11. From this `week-05-scraper/` folder:
 
 ```bash
 python3.11 -m venv .venv
