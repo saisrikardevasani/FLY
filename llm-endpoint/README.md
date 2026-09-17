@@ -98,7 +98,11 @@ Eight cases I labelled by hand in [`evals/cases.json`](evals/cases.json), each w
 it is there. Two are deliberately hard, one exists only to test the when-unsure rule, and one is
 a prompt injection.
 
-**Score: 5 of 8, on 17 September 2026, with prompt `book-genre-v1` and model `gemma3:4b`.**
+**Score: 7 of 8, on 17 September 2026, with prompt `book-genre-v2` and model `gemma3:4b`**,
+which is what ships by default. The first prompt, `book-genre-v1`, scored **5 of 8** on the same
+cases and the same model, and its run is below because the gap between them is the point.
+
+The v1 run:
 
 ```
   pass  cookbook               food-drink             conf=0.98

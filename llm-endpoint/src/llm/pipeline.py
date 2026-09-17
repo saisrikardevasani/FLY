@@ -87,7 +87,7 @@ def quarantine(payload: dict, raw: str, reason: str, prompt_version: str) -> Non
 
 def classify(payload: dict, prompt_version: str | None = None) -> tuple[Classification, int]:
     """Ask, check, and if it failed, ask once more with the reason. Returns (result, repairs)."""
-    prompt_version = prompt_version or os.environ.get("PROMPT_VERSION", "book-genre-v1")
+    prompt_version = prompt_version or os.environ.get("PROMPT_VERSION", "book-genre-v2")
 
     key = cache_key(payload, prompt_version)
     if os.environ.get("LLM_CACHE", "1") == "1" and key in _CACHE:

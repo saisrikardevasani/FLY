@@ -51,7 +51,7 @@ async def health() -> dict:
 @app.get("/stats")
 async def stats() -> dict:
     """How often the cache saved a call. Useful when the same records get reprocessed."""
-    return {**CACHE_STATS, "prompt_version": os.environ.get("PROMPT_VERSION", "book-genre-v1")}
+    return {**CACHE_STATS, "prompt_version": os.environ.get("PROMPT_VERSION", "book-genre-v2")}
 
 
 @app.post("/classify", response_model=Classification)

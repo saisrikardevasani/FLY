@@ -57,7 +57,7 @@ class ModelUnavailable(Exception):
         self.timed_out = timed_out
 
 
-def load_prompt(version: str = "book-genre-v1") -> str:
+def load_prompt(version: str = "book-genre-v2") -> str:
     """Prompts are code. They live in a file, get a version, and can be diffed."""
     return (PROMPTS_DIR / f"{version}.md").read_text(encoding="utf-8")
 
@@ -90,7 +90,7 @@ def log_call(record: dict) -> None:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def ask(system_prompt: str, payload: dict, prompt_version: str = "book-genre-v1",
+def ask(system_prompt: str, payload: dict, prompt_version: str = "book-genre-v2",
         repairs: int = 0) -> str:
     """Send the book as a user message and return whatever text comes back.
 
