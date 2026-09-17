@@ -9,7 +9,7 @@ link.
 ## The dataset: option B, the bookstore
 
 This uses the 60 validated books my A9 scraper collected from books.toscrape.com, rather than
-inventing 200 random orders. `seed.py` reads [`../scraper/output/books.json`](../scraper/output/books.json)
+inventing 200 random orders. `seed.py` reads [`../week-05-scraper/output/books.json`](../week-05-scraper/output/books.json)
 and loads it into `report.db`, converting the star rating from the word the site publishes
 ("Three") into a number the report can group and sort on (3).
 
@@ -321,6 +321,15 @@ makes it easier to read end to end. Mine is split across `db.py`, `render.py`, `
 `main.py`, which I would still choose, because the SQL and the HTML template are the two parts
 most likely to change and they have no business in the same file. It is a real trade rather than
 a mistake on either side.
+
+### One note after the repo was reorganised
+
+The folders were later renamed to week order, so the scraper now lives at
+`week-05-scraper/`. I repointed `seed.py`, but the two files in `ai-version/` still read
+`../../scraper/output/books.json` and will not find it. That is deliberate: the rule for this
+stage is that generated code is never edited afterwards, not even for a path, because the moment
+you start touching it you can no longer say the comparison was fair. The results above were
+recorded when the path was valid.
 
 ### What my prompt forgot to say
 

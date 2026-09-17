@@ -9,7 +9,7 @@ from pathlib import Path
 
 import db
 
-BOOKS_JSON = Path(__file__).resolve().parent.parent / "scraper" / "output" / "books.json"
+BOOKS_JSON = Path(__file__).resolve().parent.parent / "week-05-scraper" / "output" / "books.json"
 
 # The site writes the star count as a word. The report wants to sort and group on it.
 RATINGS = {"One": 1, "Two": 2, "Three": 3, "Four": 4, "Five": 5}
@@ -42,7 +42,7 @@ def seed(target: int | None = None) -> int:
     if not BOOKS_JSON.exists():
         raise SystemExit(
             f"No scraped books at {BOOKS_JSON}. Run the A9 scraper first: "
-            f"cd ../scraper && .venv/bin/python src/main.py"
+            f"cd ../week-05-scraper && .venv/bin/python src/main.py"
         )
 
     db.init()
