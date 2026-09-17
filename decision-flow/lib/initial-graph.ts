@@ -7,13 +7,25 @@ export const initialGraph: Graph = {
       id: "d1",
       type: "decision",
       position: { x: 260, y: 0 },
-      data: { label: "Support?", prompt: "Is this message a support request?" },
+      data: {
+        label: "Support?",
+        // A vague question gets a vague answer: "Is this a support request?" alone reads
+        // any customer message as support, including a pricing enquiry. The node prompt
+        // is the specification.
+        prompt:
+          "Is this message a support request, meaning the sender has a problem with a " +
+          "product they already use? Answer NO if they are asking about pricing, plans " +
+          "or buying.",
+      },
     },
     {
       id: "d2",
       type: "decision",
       position: { x: 20, y: 220 },
-      data: { label: "Urgent?", prompt: "Is the sender reporting something broken right now?" },
+      data: {
+        label: "Urgent?",
+        prompt: "Is the sender reporting something that is broken or failing right now?",
+      },
     },
     {
       id: "o1",
