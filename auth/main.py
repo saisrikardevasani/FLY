@@ -138,6 +138,7 @@ async def public_info() -> dict:
 # header produces this file's error shape rather than FastAPI's.
 bearer = HTTPBearer(
     auto_error=False,
+    bearerFormat="JWT",
     description="Paste the access_token returned by POST /auth/login.",
 )
 
