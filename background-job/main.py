@@ -121,4 +121,27 @@ async def make_report(ctx: inngest.Context) -> dict:
     return await ctx.step.run("build-report", build)
 
 
-inngest.fast_api.serve(app, inngest_client, [say_hello, make_report])
+@inngest_client.create_function(
+    fn_id="heartbeat",
+    trigger=inngest.TriggerCron(cron="* * * * *"),
+)
+async def heartbeat(ctx: inngest.Context) -> str:
+    """Nobody asks for this one. The clock is the only trigger.
+
+    Every minute is for watching it work. A real heartbeat would run daily.
+    """
+    counts = {"pending": 0, "done": 0, "failed": 0}
+    for report in reports.values():
+        status = report.get("status", "pending")
+        counts[status] = counts.get(status, 0) + 1
+
+    summary = (
+        f"heartbeat: {len(reports)} reports, "
+        f"{counts['pending']} pending, {counts['done']} done, {counts['failed']} failed"
+    )
+    ctx.logger.info(summary)
+    print(summary, flush=True)
+    return summary
+
+
+inngest.fast_api.serve(app, inngest_client, [say_hello, make_report, heartbeat])
