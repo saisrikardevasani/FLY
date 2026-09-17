@@ -252,3 +252,110 @@ OpenAPI security declarations route by route.
 in the request, because one shared anon client serves every caller. With stateless JWTs the
 practical effect is the same, which is to say very little, as the logout experiment above shows.
 A version that mattered would track sessions server side and have the guard check them.
+
+## AI vs me
+
+I built stages 0 to 6 by hand first, which is the only reason this section is a code review
+rather than a demonstration. The prompt was written from memory before anything was generated,
+the generated code lives in [`ai-version/`](ai-version/) and has not been edited since, and both
+versions were run side by side against the same Supabase project and the same real token.
+
+### The prompt
+
+[`ai-version/prompt-v1.md`](ai-version/prompt-v1.md) has it in full. It names all five routes and
+their status codes, the anon key, the rule that no password is stored and nothing is hashed
+locally, `Authorization: Bearer <token>`, both 401 messages, the single reusable dependency, the
+second protected route, and the Swagger padlock.
+
+### Header handling, every case
+
+| `Authorization` header | Mine | AI v1 | AI v2 |
+| --- | --- | --- | --- |
+| `Bearer <token>` | 200 | 200 | 200 |
+| `bearer <token>`, lowercase | 200 | **401** | 200 |
+| `<token>` with no scheme | 401 | 401 | 401 |
+| `Basic <token>` | 401 | 401 | 401 |
+| the word `Bearer` alone | 401 | 401 | 401 |
+| tampered token | 401 | 401 | 401 |
+| no header at all | 401 | 401 | 401 |
+
+### What the AI got wrong
+
+**It logged the whole access token.** Every failed verification printed this:
+
+```
+Token verification failed for token eyJhbGciOiJIUzI1NiJ9.SECRET-SESSION-TOKEN.signature: ...
+```
+
+That is a credential in a log file. Anyone who can read the log can use the token until it
+expires, and logs get shipped to aggregators, ticket attachments and screenshots that the token
+was never meant to reach. This is the one I would call a genuine vulnerability rather than a
+rough edge, and my prompt never thought to forbid it.
+
+**Its token extraction was string-stripping, not parsing.** `authorization.replace("Bearer ",
+"")`, called directly:
+
+```
+'Bearer TOKEN123'         -> extracts 'TOKEN123'        correct
+'TOKEN123'                -> extracts 'TOKEN123'        no scheme, sails straight through
+'Bearer Bearer TOKEN123'  -> extracts 'TOKEN123'        replaces every occurrence, not the prefix
+'BearerTOKEN123'          -> extracts 'BearerTOKEN123'  no space, so nothing is stripped
+```
+
+The second line is the brief's exact question, and the answer is that a header with no scheme
+would be accepted by that function. At runtime it is not, and the reason is interesting: see
+below.
+
+**It rejected a valid header.** `bearer <token>` in lowercase is legal, because RFC 7235 makes
+the auth scheme case-insensitive. v1 returns 401 for it. Mine compares with `.lower()`, so it
+does not.
+
+**It caught every exception around the verification.** `except Exception` turns any bug in its
+own code, an `AttributeError` for instance, into a 401 that looks exactly like a rejected token.
+That is an hour of debugging waiting to happen, because the symptom points at the user's token
+and the cause is in your file.
+
+### What the AI did better
+
+**Its layered defence saved its own broken parser.** It declared `dependencies=[Depends(security)]`
+on each protected route *and* did its own check inside the dependency. FastAPI's `HTTPBearer`
+runs first with `auto_error=True` and rejects a scheme-less header before the broken extraction
+is ever reached, which is why the table above shows 401 where the function alone would have
+returned a token. That is defence in depth doing exactly what it is for: one layer was wrong and
+nothing got through.
+
+I will be honest that this looks accidental rather than designed, and that relying on it means
+the flaw sits there waiting for someone to remove the decorator. But the principle is right and
+mine has only one layer: a single `current_user` dependency with `auto_error=False`, where the
+correctness of that one function is the whole defence. If I had made the mistake it made, mine
+would have let the token through.
+
+Unlike the A8 and A17 comparisons, this one found no bug in my own code. The cases it failed were
+cases mine already handled.
+
+### What my prompt forgot to say
+
+1. **Never log the token.** I specified the status codes and the error bodies in detail and said
+   nothing about what may be written to stdout. The result was the most serious finding here.
+2. **How to parse the header.** I wrote "pull the token out of that header", which is a
+   description of the goal, not of the method, so it chose the fragile one.
+3. **That the scheme is case-insensitive.** It did not occur to me, and the result is a
+   standards-compliant client getting a 401.
+4. **Not to swallow every exception.** I asked for a 401 on an invalid token and got a 401 on
+   anything at all.
+
+### The rematch
+
+[`ai-version/prompt-v2.md`](ai-version/prompt-v2.md) adds those four points. Regenerated once as
+[`auth_api_v2.py`](ai-version/auth_api_v2.py): it matches mine on all seven header cases
+including lowercase `bearer`, catches `AuthApiError` specifically and checks the response for
+`None` rather than relying on the handler, and the log line is now:
+
+```
+Token verification failed (...nature): invalid JWT: unable to parse or verify signature
+full token in the log: False
+```
+
+One sentence on what changed: naming the logging rule and replacing "pull the token out" with
+"split once and compare the scheme case-insensitively" fixed every failure in one pass, which
+says again that the failures were in my specification rather than in the model's reasoning.
