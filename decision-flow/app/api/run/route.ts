@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { findStart } from "@/lib/functions";
+import { findStart } from "@/lib/graph";
 import { inngest } from "@/lib/inngest";
 import { createRun } from "@/lib/runs";
 import type { Graph } from "@/lib/types";

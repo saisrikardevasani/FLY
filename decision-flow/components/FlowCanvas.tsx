@@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button";
 import { decorate } from "@/lib/edges";
 import { parseGraph, serialise } from "@/lib/graph-io";
 import { initialGraph, STORAGE_KEY } from "@/lib/initial-graph";
-import type { FlowNode, Graph } from "@/lib/types";
+import type { FlowNode, Graph, RunState } from "@/lib/types";
 
 const nodeTypes = { decision: DecisionNode, outcome: OutcomeNode };
 
@@ -29,8 +29,10 @@ const nextId = (prefix: string) => `${prefix}${counter++}`;
 
 export function FlowCanvas({
   onGraphChange,
+  run,
 }: {
   onGraphChange?: (graph: Graph) => void;
+  run?: RunState | null;
 }) {
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>(initialGraph.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(
@@ -67,6 +69,51 @@ export function FlowCanvas({
     onGraphChange?.(serialise(graph));
   }, [graph, loaded, onGraphChange]);
 
+  // Which node is at which point of the run, so the canvas shows the path being taken.
+  const nodeState = useMemo(() => {
+    const state = new Map<string, string>();
+    if (!run) return state;
+    run.steps.forEach((step, index) => {
+      const last = index === run.steps.length - 1;
+      if (step.error) state.set(step.nodeId, "error");
+      else if (step.type === "outcome") state.set(step.nodeId, "reached");
+      else if (step.answer) state.set(step.nodeId, step.answer);
+      if (last && run.status === "running" && !step.answer) state.set(step.nodeId, "running");
+    });
+    return state;
+  }, [run]);
+
+  // The edges the run actually walked down, so they can be animated.
+  const takenEdges = useMemo(() => {
+    const taken = new Set<string>();
+    if (!run) return taken;
+    for (let i = 0; i < run.steps.length - 1; i += 1) {
+      const from = run.steps[i];
+      const to = run.steps[i + 1];
+      if (!from.answer) continue;
+      const edge = edges.find(
+        (e) =>
+          e.source === from.nodeId &&
+          (e.sourceHandle ?? "yes") === from.answer &&
+          e.target === to.nodeId,
+      );
+      if (edge) taken.add(edge.id);
+    }
+    return taken;
+  }, [run, edges]);
+
+  const shownEdges = useMemo(
+    () =>
+      edges.map((e) =>
+        takenEdges.has(e.id)
+          ? { ...e, animated: true, style: { ...e.style, strokeWidth: 3.5 } }
+          : run
+            ? { ...e, animated: false, style: { ...e.style, opacity: 0.35 } }
+            : e,
+      ),
+    [edges, takenEdges, run],
+  );
+
   // Narrowing on n.type keeps the node union intact: a decision keeps its prompt,
   // an outcome never grows one.
   const setPrompt = useCallback(
@@ -95,9 +142,14 @@ export function FlowCanvas({
     () =>
       nodes.map((n) => ({
         ...n,
-        data: { ...n.data, onPromptChange: setPrompt, onLabelChange: setLabel },
+        data: {
+          ...n.data,
+          onPromptChange: setPrompt,
+          onLabelChange: setLabel,
+          state: nodeState.get(n.id) ?? "idle",
+        },
       })) as FlowNode[],
-    [nodes, setPrompt, setLabel],
+    [nodes, setPrompt, setLabel, nodeState],
   );
 
   const onConnect = useCallback(
@@ -184,7 +236,7 @@ export function FlowCanvas({
 
       <ReactFlow
         nodes={wired}
-        edges={edges}
+        edges={shownEdges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}

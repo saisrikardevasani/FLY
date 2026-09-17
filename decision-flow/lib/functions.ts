@@ -1,24 +1,11 @@
+import { findStart, nextNode } from "./graph";
 import { inngest } from "./inngest";
 import { decide } from "./llm";
 import { appendStep, updateRun } from "./runs";
-import type { Branch, FlowNode, Graph } from "./types";
+import type { Branch, Graph } from "./types";
 
 /** A drawn graph can contain a cycle. Stop rather than loop until the bill arrives. */
 const MAX_HOPS = 25;
-
-/** The entry node is the one nothing points at. */
-export function findStart(graph: Graph): FlowNode | undefined {
-  const targeted = new Set(graph.edges.map((e) => e.target));
-  return graph.nodes.find((n) => !targeted.has(n.id));
-}
-
-function nextNode(graph: Graph, fromId: string, branch: Branch): FlowNode | undefined {
-  const edge = graph.edges.find(
-    (e) => e.source === fromId && (e.sourceHandle ?? "yes") === branch,
-  );
-  if (!edge) return undefined;
-  return graph.nodes.find((n) => n.id === edge.target);
-}
 
 export const runWorkflow = inngest.createFunction(
   { id: "run-workflow", triggers: [{ event: "flow/run.requested" }], retries: 1 },
