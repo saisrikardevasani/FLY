@@ -6,7 +6,10 @@ import uuid
 import inngest
 import inngest.fast_api
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, StringConstraints
+from typing import Annotated
 
 app = FastAPI(
     title="Report API",
@@ -23,7 +26,22 @@ reports: dict[str, dict] = {}
 
 
 class ReportIn(BaseModel):
-    topic: str
+    """A missing or blank topic is the client's mistake, and it is caught here."""
+
+    topic: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_body(request, exc: RequestValidationError) -> JSONResponse:
+    """A body that fails validation is a 400, not FastAPI's default 422."""
+    problem = exc.errors()[0]
+    field = ".".join(p for p in problem["loc"][1:] if isinstance(p, str)) or "body"
+    return JSONResponse(status_code=400, content={"error": f"{field}: {problem['msg']}"})
+
+
+@app.exception_handler(HTTPException)
+async def error_shape(request, exc: HTTPException) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
 
 
 @app.get("/health")
@@ -63,9 +81,18 @@ async def say_hello(ctx: inngest.Context) -> str:
     return "Hello from the background!"
 
 
+async def report_failed(ctx: inngest.Context) -> None:
+    """Runs once the retries are used up, so a dead job stops looking pending."""
+    report_id = ctx.event.data["event"]["data"]["id"]
+    previous = reports.get(report_id, {"id": report_id})
+    reports[report_id] = {**previous, "status": "failed"}
+
+
 @inngest_client.create_function(
     fn_id="make-report",
     trigger=inngest.TriggerEvent(event="report/requested"),
+    retries=2,  # three attempts in total, so the show is short
+    on_failure=report_failed,
 )
 async def make_report(ctx: inngest.Context) -> dict:
     """The slow half of POST /reports, running where nobody is waiting on it."""
@@ -76,6 +103,10 @@ async def make_report(ctx: inngest.Context) -> dict:
     await ctx.step.sleep("do-the-slow-work", datetime.timedelta(seconds=8))
 
     async def build() -> dict:
+        # A wrong moment deserves a retry. This stands in for the oven breaking.
+        if topic == "fail":
+            raise RuntimeError("The report oven is broken!")
+
         finished = {
             "id": report_id,
             "topic": topic,
