@@ -4,7 +4,8 @@ Nine assignments, built one stage at a time between 18 August and 17 September 2
 is self-contained: its own dependencies, its own README, its own tests, and a git log where every
 commit is a stage that actually worked when it was made.
 
-107 commits. Everything here was run before it was written down.
+109 commits, one per stage, made at the point that stage actually worked. Everything here was
+run before it was written down.
 
 ## How to read this repo
 
@@ -76,7 +77,7 @@ characters encoding 64 bytes, so the final character carries two significant bit
 replaced with `X` shares both. The decoded bytes were identical. The token had not been altered
 at all. Flipping a character in the middle produces a genuinely different token and gets the 401.
 
-**13 commits**, 37 assertions.
+**12 stage commits**, 37 assertions.
 
 ## Week 5: the polite scraper
 
@@ -96,7 +97,7 @@ then failed for a real reason: `cache_name` was taking the second-to-last path s
 ending in a slash became `book-catalogue.html`. Every book would have shared one cache file and
 served each other's pages.
 
-**14 commits**, 22 assertions, 63 seconds from a clean clone to 60 validated records.
+**12 stage commits**, 22 assertions, 63 seconds from a clean clone to 60 validated records.
 
 ## Week 6: an LLM behind an API
 
@@ -127,7 +128,7 @@ returning. I stopped the run rather than spend forty minutes on it. A model that
 inside a request timeout is not a candidate whatever it scores, and that is a more useful thing
 to have learned than a second number.
 
-**12 commits**, 34 assertions.
+**11 stage commits**, 34 assertions.
 
 ## Week 7: your first background job
 
@@ -154,7 +155,7 @@ registered, but queueing five jobs and sampling every two seconds showed all fiv
 once. The configuration is right and the local Dev Server does not enforce it. That box is marked
 configured but unverified rather than ticked, because I watched the opposite of what it claims.
 
-**11 commits**, 18 assertions.
+**11 stage commits**, 18 assertions.
 
 ## Week 7: PDF report generator
 
@@ -176,7 +177,7 @@ pages carrying the repeated table header: 179/179
 rows whose text is split across a page break: 0
 ```
 
-**13 commits**, 23 assertions.
+**12 stage commits**, 23 assertions.
 
 ## Week 7: AI decision flow
 
@@ -194,7 +195,7 @@ The node prompt is the specification. That is why the log panel shows the prompt
 answer for every step: when a run goes somewhere surprising, the question that sent it there is
 on screen.
 
-**5 commits**, 11 assertions.
+**4 phase commits**, 11 assertions.
 
 ## Three bugs the AI comparison found in my code
 
