@@ -23,7 +23,22 @@ def rows_from(path: Path) -> list[tuple]:
     ]
 
 
-def seed() -> int:
+def inflate(rows: list[tuple], target: int) -> list[tuple]:
+    """Repeat the real books until there are `target` of them, keeping urls unique.
+
+    Only used for the big-table experiment, to see what a long report costs.
+    """
+    out = []
+    while len(out) < target:
+        for title, price, rating, url in rows:
+            if len(out) >= target:
+                break
+            n = len(out)
+            out.append((f"{title} (copy {n})", price, rating, f"{url}#{n}"))
+    return out
+
+
+def seed(target: int | None = None) -> int:
     if not BOOKS_JSON.exists():
         raise SystemExit(
             f"No scraped books at {BOOKS_JSON}. Run the A9 scraper first: "
@@ -32,6 +47,8 @@ def seed() -> int:
 
     db.init()
     rows = rows_from(BOOKS_JSON)
+    if target:
+        rows = inflate(rows, target)
     with db.connect() as connection:
         # Clearing first is what makes a second run leave 60 rows rather than 120.
         connection.execute("DELETE FROM books")
@@ -42,7 +59,10 @@ def seed() -> int:
 
 
 if __name__ == "__main__":
-    count = seed()
+    import sys
+
+    target = int(sys.argv[1]) if len(sys.argv) > 1 else None
+    count = seed(target)
     with db.connect() as connection:
         total = connection.execute("SELECT COUNT(*) AS n FROM books").fetchone()["n"]
     print(f"seeded {count} books, table now holds {total}")

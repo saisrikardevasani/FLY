@@ -7,19 +7,29 @@ from playwright.sync_api import sync_playwright
 
 REPORTS_DIR = Path(__file__).resolve().parent / "reports"
 
+# Chromium fills in pageNumber and totalPages itself, on every page.
+FOOTER = """
+<div style="font-size:8pt; color:#777; width:100%; padding:0 12mm;
+            font-family:Helvetica, Arial, sans-serif;">
+  <span>Bookstore stock report</span>
+  <span style="float:right">Page <span class="pageNumber"></span>
+    of <span class="totalPages"></span></span>
+</div>
+"""
+
 STYLE = """
   body { font-family: -apple-system, Helvetica, Arial, sans-serif; color: #1a1a1a;
          margin: 0; font-size: 11pt; }
   h1 { font-size: 22pt; margin: 0 0 4px; }
-  h2 { font-size: 13pt; margin: 28px 0 8px; border-bottom: 2px solid #1a1a1a;
-       padding-bottom: 4px; }
+  h2 { font-size: 13pt; margin: 28px 0 8px; border-bottom: 2px solid #2d6a4f;
+       padding-bottom: 4px; color: #2d6a4f; }
   .date { color: #666; margin: 0 0 24px; }
   .totals { display: flex; gap: 16px; margin-bottom: 8px; }
   .total { background: #f2f2f2; padding: 14px 18px; flex: 1; }
-  .total .value { font-size: 20pt; font-weight: 600; }
+  .total .value { font-size: 20pt; font-weight: 600; color: #2d6a4f; }
   .total .label { color: #555; font-size: 9pt; text-transform: uppercase; }
   table { width: 100%; border-collapse: collapse; }
-  th { background: #1a1a1a; color: #fff; text-align: left; padding: 7px 9px;
+  th { background: #2d6a4f; color: #fff; text-align: left; padding: 7px 9px;
        font-size: 9pt; text-transform: uppercase; }
   td { padding: 7px 9px; border-bottom: 1px solid #ddd; vertical-align: top; }
   td.num, th.num { text-align: right; white-space: nowrap; }
@@ -35,6 +45,8 @@ STYLE = """
 def html_for(data: dict) -> str:
     """Build the page. A report is a web page that happens to be printed."""
     today = datetime.date.today().strftime("%d %B %Y")
+    min_rating = data.get("min_rating", 1)
+    filter_note = f", filtered to {min_rating} stars and above" if min_rating > 1 else ""
 
     top_rows = "".join(
         f"<tr><td>{b['title']}</td><td class='num'>{b['rating']}</td>"
@@ -55,7 +67,7 @@ def html_for(data: dict) -> str:
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><style>{STYLE}</style></head><body>
   <h1>Bookstore stock report</h1>
-  <p class="date">Generated {today} from {data['total_books']} scraped books</p>
+  <p class="date">Generated {today} from {data['total_books']} scraped books{filter_note}</p>
 
   <div class="totals">
     <div class="total"><div class="label">Books in catalogue</div>
@@ -89,7 +101,10 @@ def render_pdf(html: str, path: Path) -> Path:
             path=str(path),
             format="A4",
             print_background=True,
-            margin={"top": "14mm", "bottom": "14mm", "left": "12mm", "right": "12mm"},
+            display_header_footer=True,
+            header_template="<div></div>",  # empty, but required alongside the footer
+            footer_template=FOOTER,
+            margin={"top": "14mm", "bottom": "18mm", "left": "12mm", "right": "12mm"},
         )
         browser.close()
     return path
