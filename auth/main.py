@@ -149,11 +149,19 @@ def token_from(authorization: str | None) -> str:
 
 @app.get("/protected/profile")
 async def profile(authorization: str | None = Header(default=None)) -> dict:
-    """The locked door, with no guard behind it yet.
+    """The guard inspects the pass, and turns away forgeries.
 
-    Stage 2 only checks that a token was presented. Stage 3 asks Supabase whether it is
-    real, which is a different question and the one that matters.
+    Verification is a network call to Supabase rather than a local check, which is the
+    point: this server cannot be talked into accepting a token Supabase would reject.
     """
     token = token_from(authorization)
-    return {"message": "A token was presented, but nobody has checked it yet.",
-            "token_length": len(token)}
+
+    try:
+        result = supabase.auth.get_user(token)
+    except AuthApiError as exc:
+        raise HTTPException(401, "Invalid or expired token") from exc
+
+    if result is None or result.user is None:
+        raise HTTPException(401, "Invalid or expired token")
+
+    return safe_user(result.user)
