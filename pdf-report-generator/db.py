@@ -13,6 +13,13 @@ CREATE TABLE IF NOT EXISTS books (
     rating INTEGER NOT NULL,
     url    TEXT    NOT NULL UNIQUE
 );
+
+-- The bookkeeping for generated reports lives next to the data they describe.
+CREATE TABLE IF NOT EXISTS reports (
+    id         TEXT PRIMARY KEY,
+    path       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -63,3 +70,38 @@ def get_report_data() -> dict:
             "by_rating": rows(BY_RATING),
             "all_books": rows(ALL_BOOKS),
         }
+
+
+def save_report(report_id: str, path: str, created_at: str) -> None:
+    with connect() as connection:
+        connection.execute(
+            "INSERT INTO reports (id, path, created_at) VALUES (?, ?, ?)",
+            (report_id, path, created_at),
+        )
+
+
+def get_report(report_id: str) -> dict | None:
+    with connect() as connection:
+        row = connection.execute(
+            "SELECT id, path, created_at FROM reports WHERE id = ?", (report_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def report_made_on(day: str) -> dict | None:
+    """The first report generated on a given day, if there is one."""
+    with connect() as connection:
+        row = connection.execute(
+            "SELECT id, path, created_at FROM reports WHERE date(created_at) = ? "
+            "ORDER BY created_at LIMIT 1",
+            (day,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_reports() -> list[dict]:
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT id, path, created_at FROM reports ORDER BY created_at DESC"
+        ).fetchall()
+    return [dict(row) for row in rows]
