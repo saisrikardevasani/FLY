@@ -189,6 +189,9 @@ unique URLs, and the same endpoint generates over them:
 | 60 | 3 | 0.24s |
 | 5,000 | 179 | 0.56s |
 
+Those are warm timings, with Chromium already launched once. The very first request after a
+fresh clone took 1.12 seconds, which is the browser starting from cold.
+
 Two things that says. First, the work is not linear in rows: 83 times the data cost about twice
 the time, because most of the 0.24 seconds is launching Chromium rather than laying out rows, so
 the fixed cost dominates until the document gets genuinely large. Second, 0.56 seconds inside a
