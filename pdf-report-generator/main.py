@@ -48,6 +48,18 @@ def create_report(body: ReportIn | None = None) -> JSONResponse:
     """
     body = body or ReportIn()
     created = datetime.datetime.now(datetime.timezone.utc)
+
+    # A user double-clicks the button. Every user, every time, forever. One request per
+    # day produces one report, and the second caller gets the first one back with a 200
+    # rather than a second identical file.
+    if not body.force:
+        existing = db.report_made_on(created.date().isoformat())
+        if existing is not None:
+            return JSONResponse(
+                status_code=200,
+                content={"id": existing["id"], "file": link_for(existing["id"])},
+            )
+
     report_id = uuid.uuid4().hex[:12]
 
     filename = f"{report_id}.pdf"
