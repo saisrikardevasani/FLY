@@ -49,19 +49,19 @@ Then open the dashboard at http://localhost:8288. The tests need neither termina
 $ curl -o /dev/null -s -w 'status=%{http_code}  total=%{time_total}s\n' \
     -X POST http://localhost:8000/reports \
     -H "Content-Type: application/json" -d '{"topic":"cats"}'
-status=202  total=0.001845s
+status=202  total=0.001916s
 
-$ curl -s http://localhost:8000/reports/d1e99078
-{"id":"d1e99078","topic":"cats","status":"pending"}
+$ curl -s http://localhost:8000/reports/b4ba0748
+{"id":"b4ba0748","topic":"cats","status":"pending","result":null}
 
 # eleven seconds later
-$ curl -s http://localhost:8000/reports/d1e99078
-{"id":"d1e99078","topic":"cats","status":"done",
+$ curl -s http://localhost:8000/reports/b4ba0748
+{"id":"b4ba0748","topic":"cats","status":"done",
  "result":"Everything worth knowing about cats, from 3 sources.",
- "finished_at":"2026-09-17T10:42:08.427051+00:00"}
+ "finished_at":"2026-09-17T10:52:52.711505+00:00"}
 ```
 
-The request took 1.8 milliseconds. The work took eight seconds. Asking again and again until
+The request took 1.9 milliseconds. The work took eight seconds. Asking again and again until
 the answer changes is called polling, and "pending now, done shortly" is eventual consistency.
 
 ## Bad input against a bad moment
@@ -205,7 +205,7 @@ paid service billed per call. A cap turns someone else's outage into your queue.
 
 ## The tests
 
-`test_jobs.py` is 15 plain asserts and needs no Dev Server, because everything it covers is
+`test_jobs.py` is 18 plain asserts and needs no Dev Server, because everything it covers is
 reachable without one: the 400s for a missing, blank or wrongly typed topic, the 404 for an
 unknown id, the heartbeat's counting, and the cleanup rule about which reports expire.
 
@@ -218,3 +218,118 @@ tell you the truth about. They are checked above against a running Dev Server in
 Reports live in a Python dictionary. Two workers would not see each other's reports, and a
 restart forgets every pending one. The fix is the Postgres from A3, which this assignment did
 not ask for.
+
+## AI vs me
+
+I built stages 0 to 5 by hand first, which is the only reason this section is a code review
+rather than a demonstration. The prompt was written from memory before anything was generated,
+the generated code lives in [`ai-version/`](ai-version/) and has not been edited since, and
+every line below comes from running it.
+
+Both versions were run alone against the same Dev Server, on the same port, one after the other.
+
+### The prompt
+
+[`ai-version/prompt-v1.md`](ai-version/prompt-v1.md) has it in full. It names the 202 and the id,
+the status endpoint and its three states, the 404, the 400 for bad input, the two steps with an
+eight second sleep, the retries of two, the "fail" topic that raises, the every-minute cron, and
+the app id.
+
+### Checkpoint results
+
+| Checkpoint | Mine | AI v1 | AI v2 |
+| --- | --- | --- | --- |
+| `POST /reports` returns 202 in well under a second | 0.0019s | 0.0037s | 0.0023s |
+| poll says `pending`, then `done` with a result | yes | yes | yes |
+| unknown id returns 404 | yes | yes | yes |
+| missing topic returns 400 | yes | yes | yes |
+| blank topic returns 400 | yes | yes | yes |
+| a topic of `42` returns 400 | yes | **no, 422** | yes |
+| `topic: "fail"` shows 3 attempts and ends Failed | yes | yes | yes |
+| the failed report stops reading `pending` | yes | **no, never** | yes |
+| the cron's failed counter can reach 1 | yes | **no, always 0** | yes |
+| every error has the same JSON shape | `{"error"}` | mixed | `{"error"}` |
+
+### What the AI got wrong
+
+**It counted a state it could never produce.** v1's cron counts pending, done and failed, exactly
+as asked. But nothing in v1 ever sets a report to `failed`. After a run exhausted its three
+attempts and the dashboard showed **Failed**, the API still answered:
+
+```
+{"id":"c35c24c0-...","topic":"fail","status":"pending","result":null}
+```
+
+and its cron kept printing `Reports: 1 pending, 2 done, 0 failed`. The job was dead and the
+status endpoint said it was coming. A client polling that id waits forever. The failed counter
+it wrote was decoration: it could not move off zero.
+
+Mine avoids this with an `on_failure` handler, which is the piece v1 has no equivalent of.
+
+**A wrongly typed topic escaped as a 422.** v1 checks for missing and blank, both of which it
+turns into 400, but a `topic` of `42` never reaches that check: Pydantic rejects it first and
+FastAPI's default handler returns 422 with its own error shape. So v1 has two error formats, and
+a client has to parse both:
+
+```
+no topic:    {"detail":"topic is required"}                    [400]
+wrong type:  {"detail":[{"type":"string_type","loc":[...]}]}   [422]
+```
+
+**Its timestamps were naive local time.** `datetime.datetime.now()` with no timezone, written
+straight into the result string. It reads `2026-09-17 11:44:57.483737`, which is ambiguous the
+moment the code runs anywhere other than this laptop.
+
+**It edited stored reports in place** and had no check for building the same report twice.
+
+### What the AI did better
+
+**Its response shape was stable and mine was not.** v1 stores `"result": None` from the moment
+the report is created, so a client reads the same keys whether the report is pending or done.
+Mine only added `result` once the report finished, so the pending shape and the done shape were
+different objects and a client had to guard every read. That is the better decision and I have
+taken it: my pending reports now carry `"result": null` too.
+
+**Its ids could not collide and mine could.** v1 uses a full `uuid.uuid4()`. I had been
+truncating to `uuid.uuid4().hex[:8]` because it is nicer to paste into a curl command, which is
+about 4.3 billion values, so two reports would collide somewhere around 77,000 of them, and a
+collision would silently overwrite a stored report. I have kept the short id and added the check
+that makes it safe: generate again while the candidate is already taken. The test for that is in
+`test_jobs.py`.
+
+Both of those were found by running the two side by side, not by reading the code.
+
+### What my prompt forgot to say
+
+1. **How a report becomes failed.** I asked for a counter of failed reports and never said what
+   sets that status. The AI wrote exactly what I asked for and the result was a lie in the API.
+   This is the whole lesson of the stage: it implemented my specification, and my specification
+   had a hole in the middle of it.
+2. **That every bad body is a 400.** I said "if the topic is missing or empty", so a wrong type
+   was outside what I described and the framework's default got there first.
+3. **That timestamps are UTC.** I did not mention time zones at all.
+4. **Anything about idempotency or not mutating stored state.** Both were in my own code and
+   neither was in my prompt, so neither appeared.
+
+### The rematch
+
+[`ai-version/prompt-v2.md`](ai-version/prompt-v2.md) adds those four points and nothing else.
+Regenerated once as [`jobs_v2.py`](ai-version/jobs_v2.py). Every previously failing box now
+passes: all three bad bodies return 400 in one shape, timestamps are UTC and aware, and a run
+that exhausts its retries now marks the report failed:
+
+```
+{"id":"499e4ab5-...","topic":"fail","status":"failed","result":null,
+ "failed_at":"2026-09-17T10:50:13.016717+00:00"}
+```
+
+with the cron finally able to say something other than zero:
+
+```
+10:49:59  "Reports: 1 pending, 2 done, 0 failed"     <- before the failure landed
+10:50:59  "Reports: 0 pending, 2 done, 1 failed"     <- after
+```
+
+One line of difference remains between v2 and mine: v2 has no cleanup cron, no outbox and no
+list endpoint, because prompt v2 never mentioned them. The model built precisely what was
+specified, twice. The specification is the product.

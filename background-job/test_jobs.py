@@ -8,7 +8,7 @@ import datetime
 from fastapi.testclient import TestClient
 
 import main
-from main import expired, summarise
+from main import expired, new_id, summarise
 
 client = TestClient(main.app)
 NOW = datetime.datetime(2026, 9, 17, 12, 0, tzinfo=datetime.timezone.utc)
@@ -65,5 +65,15 @@ check("a report finished 2 minutes ago is kept", "fresh" not in old)
 check("a pending report is never expired", "pending" not in old)
 check("a failed report is kept for inspection", "failed_old" not in old)
 check("exactly one report expired", len(old) == 1)
+
+print("report ids never overwrite an existing report")
+taken = {"aaaaaaaa": {}, "bbbbbbbb": {}}
+sequence = iter(["aaaaaaaa", "bbbbbbbb", "cccccccc"])
+check("a taken id is skipped rather than reused",
+      new_id(taken, generate=lambda: next(sequence)) == "cccccccc")
+check("an id is free straight away when nothing is taken",
+      new_id({}, generate=lambda: "dddddddd") == "dddddddd")
+check("real ids are eight hex characters",
+      len(new_id({})) == 8 and all(c in "0123456789abcdef" for c in new_id({})))
 
 print("\nall checks passed")

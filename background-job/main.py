@@ -32,6 +32,18 @@ OUTBOX = pathlib.Path(__file__).resolve().parent / "outbox"
 KEEP_DONE_FOR = datetime.timedelta(minutes=10)
 
 
+def new_id(taken: dict[str, dict], generate=lambda: uuid.uuid4().hex[:8]) -> str:
+    """A short id, checked against what is already stored.
+
+    Eight hex characters is nice to paste into a curl command and small enough that two
+    reports would eventually collide on their own. A collision here would silently
+    overwrite somebody's report, so ask again until the id is free.
+    """
+    while (candidate := generate()) in taken:
+        pass
+    return candidate
+
+
 def summarise(current: dict[str, dict]) -> str:
     """One line saying where every report got to."""
     counts = {"pending": 0, "done": 0, "failed": 0}
@@ -82,8 +94,15 @@ async def health() -> dict:
 @app.post("/reports", status_code=202)
 async def request_report(body: ReportIn) -> dict:
     """Take the order, hand back a ticket, and do no slow work at all."""
-    report_id = uuid.uuid4().hex[:8]
-    reports[report_id] = {"id": report_id, "topic": body.topic, "status": "pending"}
+    report_id = new_id(reports)
+    # Carry the result key from the start, so a client reads the same shape whether the
+    # report is pending or done. The AI version had this right and this one did not.
+    reports[report_id] = {
+        "id": report_id,
+        "topic": body.topic,
+        "status": "pending",
+        "result": None,
+    }
 
     await inngest_client.send(
         inngest.Event(name="report/requested", data={"id": report_id, "topic": body.topic})
