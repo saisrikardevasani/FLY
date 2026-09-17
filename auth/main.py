@@ -32,6 +32,12 @@ def required(name: str) -> str:
 SUPABASE_URL = required("SUPABASE_URL")
 SUPABASE_KEY = required("SUPABASE_KEY")
 
+# Who may reach /protected/admin. A real system would keep this on the user record or in
+# a claim, not in a constant, but the point of the route is the 401/403 difference.
+ADMIN_EMAILS = {
+    e.strip() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()
+}
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 @contextlib.asynccontextmanager
@@ -176,6 +182,46 @@ async def profile(user: dict = Depends(current_user)) -> dict:
 async def dashboard(user: dict = Depends(current_user)) -> dict:
     """A second locked door, and not one line of new auth code. That reuse is the point."""
     return {"message": f"Welcome back, {user['email']}.", "user": user}
+
+
+@app.get("/protected/admin")
+async def admin_only(user: dict = Depends(current_user)) -> dict:
+    """401 and 403 answer different questions.
+
+    401 is "I do not know you". 403 is "I know exactly who you are, and no". Reaching
+    this route at all means the token was valid, so anyone refused here is refused on
+    authorisation rather than authentication.
+    """
+    if user["email"] not in ADMIN_EMAILS:
+        raise HTTPException(status_code=403, detail="This route is for admins only")
+    return {"message": f"Admin console for {user['email']}."}
+
+
+class RefreshIn(BaseModel):
+    refresh_token: str = Field(min_length=1)
+
+
+@app.post("/auth/refresh")
+async def refresh(body: RefreshIn) -> dict:
+    """Trade a refresh token for a new access token, without asking for the password again.
+
+    This is why refresh tokens exist: access tokens are deliberately short lived, so
+    something has to renew them that is not the user typing their password hourly.
+    """
+    try:
+        result = supabase.auth.refresh_session(body.refresh_token)
+    except AuthApiError as exc:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token") from exc
+
+    if result is None or result.session is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+
+    return {
+        "access_token": result.session.access_token,
+        "refresh_token": result.session.refresh_token,
+        "token_type": "bearer",
+        "expires_in": result.session.expires_in,
+    }
 
 
 @app.post("/auth/logout", status_code=204)

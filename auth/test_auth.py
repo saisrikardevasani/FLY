@@ -59,12 +59,28 @@ r = client.get("/protected/profile", headers={"Authorization": f"Bearer {BAD_TOK
 check("a forged token is a 401", r.status_code == 401)
 check("and the message says why", r.json() == {"error": "Invalid or expired token"})
 
+print("401 and 403 are different answers")
+r = client.get("/protected/admin")
+check("no token at all is a 401", r.status_code == 401)
+check("and the reason is that nobody was identified",
+      r.json() == {"error": "Access token required"})
+check("a forged token is also a 401",
+      client.get("/protected/admin",
+                 headers={"Authorization": f"Bearer {BAD_TOKEN}"}).status_code == 401)
+
+print("the refresh route validates before it calls anything")
+check("a missing refresh_token is a 400",
+      client.post("/auth/refresh", json={}).status_code == 400)
+check("an empty refresh_token is a 400",
+      client.post("/auth/refresh", json={"refresh_token": ""}).status_code == 400)
+
 print("swagger advertises the padlock")
 schema = client.get("/openapi.json").json()
 schemes = schema["components"]["securitySchemes"]
 check("a bearer scheme is declared", any(
     s.get("scheme") == "bearer" and s.get("type") == "http" for s in schemes.values()))
-for route in ("/protected/profile", "/protected/dashboard", "/auth/logout"):
+for route in ("/protected/profile", "/protected/dashboard", "/protected/admin",
+              "/auth/logout"):
     method = "post" if route == "/auth/logout" else "get"
     check(f"{route} is marked as needing it",
           "security" in schema["paths"][route][method])
