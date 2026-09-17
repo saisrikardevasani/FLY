@@ -21,7 +21,8 @@ from pydantic import ValidationError  # noqa: E402
 
 import main  # noqa: E402
 from llm.client import NEVER_RETRY, WORTH_RETRYING, backoff_for  # noqa: E402
-from llm.pipeline import Unusable, extract_json, parse_and_validate  # noqa: E402
+from llm.pipeline import (  # noqa: E402
+    Unusable, cache_key, extract_json, parse_and_validate)
 from llm.schema import FALLBACK, STUB, Classification  # noqa: E402
 
 client = TestClient(main.app)
@@ -96,6 +97,19 @@ class Throttled(Exception):
 
 
 check("Retry-After is obeyed instead of guessed", backoff_for(1, Throttled()) == 7.0)
+
+print("the cache key")
+book = {"title": "Olio", "description": "A poetry collection."}
+check("the same book and prompt give the same key",
+      cache_key(book, "book-genre-v1") == cache_key(book, "book-genre-v1"))
+check("a different book gives a different key",
+      cache_key(book, "book-genre-v1")
+      != cache_key({**book, "title": "Other"}, "book-genre-v1"))
+check("changing the prompt version invalidates the entry",
+      cache_key(book, "book-genre-v1") != cache_key(book, "book-genre-v2"))
+check("key order in the payload does not change the key",
+      cache_key({"title": "A", "description": "B"}, "v1")
+      == cache_key({"description": "B", "title": "A"}, "v1"))
 
 print("the endpoint validates before it ever calls a model")
 check("a missing description is a 400",

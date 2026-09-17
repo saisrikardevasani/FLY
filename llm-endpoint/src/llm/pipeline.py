@@ -5,7 +5,9 @@ against the schema, given exactly one chance to correct itself, and quarantined 
 still fails. Nothing the model wrote reaches the caller unvalidated.
 """
 
+import hashlib
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +26,20 @@ REPAIR_INSTRUCTION = (
     "Your previous answer was rejected for this reason. Return only corrected JSON "
     "matching the schema, with no code fence and no commentary."
 )
+
+
+# Re-running enrichment over the same scraped records is the case this pays for: the 60
+# books get classified again every time the eval or a backfill runs. It would earn nothing
+# against free-text support messages, where almost nothing repeats.
+_CACHE: dict[str, Classification] = {}
+CACHE_STATS = {"hits": 0, "misses": 0}
+
+
+def cache_key(payload: dict, prompt_version: str) -> str:
+    """The prompt version is part of the key. Change the prompt and yesterday's answers
+    are stale, so they must not be served."""
+    blob = json.dumps({"payload": payload, "prompt": prompt_version}, sort_keys=True)
+    return hashlib.sha256(blob.encode()).hexdigest()
 
 
 class Unusable(Exception):
@@ -69,13 +85,23 @@ def quarantine(payload: dict, raw: str, reason: str, prompt_version: str) -> Non
         handle.write(json.dumps(line, ensure_ascii=False) + "\n")
 
 
-def classify(payload: dict, prompt_version: str = "book-genre-v1") -> tuple[Classification, int]:
+def classify(payload: dict, prompt_version: str | None = None) -> tuple[Classification, int]:
     """Ask, check, and if it failed, ask once more with the reason. Returns (result, repairs)."""
+    prompt_version = prompt_version or os.environ.get("PROMPT_VERSION", "book-genre-v1")
+
+    key = cache_key(payload, prompt_version)
+    if os.environ.get("LLM_CACHE", "1") == "1" and key in _CACHE:
+        CACHE_STATS["hits"] += 1
+        return _CACHE[key], 0
+    CACHE_STATS["misses"] += 1
+
     system = load_prompt(prompt_version)
     raw = ask(system, payload, prompt_version)
 
     try:
-        return parse_and_validate(raw), 0
+        result = parse_and_validate(raw)
+        _CACHE[key] = result
+        return result, 0
     except Unusable as first_failure:
         reason = str(first_failure)
 
@@ -90,7 +116,9 @@ def classify(payload: dict, prompt_version: str = "book-genre-v1") -> tuple[Clas
     repaired = ask(system, repair_payload, prompt_version, repairs=1)
 
     try:
-        return parse_and_validate(repaired), 1
+        result = parse_and_validate(repaired)
+        _CACHE[key] = result
+        return result, 1
     except Unusable as second_failure:
         quarantine(payload, repaired, str(second_failure), prompt_version)
         raise Unusable(str(second_failure)) from second_failure

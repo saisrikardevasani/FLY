@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from llm.client import ModelUnavailable  # noqa: E402
-from llm.pipeline import Unusable, classify as run_pipeline  # noqa: E402
+from llm.pipeline import CACHE_STATS, Unusable, classify as run_pipeline  # noqa: E402
 from llm.schema import FALLBACK, STUB, ClassifyIn, Classification  # noqa: E402
 
 load_dotenv()
@@ -46,6 +46,12 @@ async def error_shape(request, exc: HTTPException) -> JSONResponse:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/stats")
+async def stats() -> dict:
+    """How often the cache saved a call. Useful when the same records get reprocessed."""
+    return {**CACHE_STATS, "prompt_version": os.environ.get("PROMPT_VERSION", "book-genre-v1")}
 
 
 @app.post("/classify", response_model=Classification)
