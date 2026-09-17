@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
+from llm.client import ask, load_prompt  # noqa: E402
 from llm.schema import STUB, ClassifyIn, Classification  # noqa: E402
 
 load_dotenv()
@@ -41,11 +42,14 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/classify", response_model=Classification)
-async def classify(body: ClassifyIn) -> Classification:
+@app.post("/classify")
+async def classify(body: ClassifyIn) -> dict:
     # Stub mode is not a toy. It is how every later stage gets built without spending a
     # call on a typo, and how the tests run with no model on the machine at all.
     if flag("LLM_STUB", "0") == "1":
-        return STUB
+        return STUB.model_dump()
 
-    return STUB
+    # Stage 2 returns the model's text as it arrives. Stage 3 is where it stops being
+    # trusted and starts being parsed and checked.
+    raw = ask(load_prompt(), {"title": body.title, "description": body.description})
+    return {"raw": raw}
