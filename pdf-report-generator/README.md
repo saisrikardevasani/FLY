@@ -220,3 +220,139 @@ The once-a-day check reads the database and then writes, with no lock between th
 requests arriving in the same millisecond can both find nothing and both generate. SQLite would
 let a `UNIQUE (date(created_at), min_rating)` constraint settle it properly, and this does not
 have one.
+
+## AI vs me
+
+I built stages 0 to 6 by hand first, which is the only reason this section is a code review
+rather than a demonstration. The prompt was written from memory before anything was generated,
+the generated code lives in [`ai-version/`](ai-version/) and has not been edited since, and
+every line below comes from running it on the same 60 books.
+
+### The prompt
+
+[`ai-version/prompt-v1.md`](ai-version/prompt-v1.md) has it in full. It names the schema, the
+seed that must be safe to run twice, the four aggregations as SQL, the HTML page, A4 with
+backgrounds, all four endpoints, the once-a-day rule with its `force` override, and the fact that
+Playwright's sync API cannot run inside an async endpoint.
+
+### Checkpoint results
+
+| Checkpoint | Mine | AI v1 | AI v2 |
+| --- | --- | --- | --- |
+| `POST /reports` returns 201 and a link | 0.27s | 0.25s | yes |
+| `GET /reports/{id}` returns the row, unknown id is 404 | yes | yes | yes |
+| the file downloads and opens as a real PDF | 3 pages | 3 pages | 3 pages |
+| the second POST today returns the same id | yes | yes | yes |
+| ...and answers **200**, not 201 | yes | **no, 201** | yes |
+| exactly one file in `reports/` after two POSTs | yes | yes | yes |
+| the table header repeats on every page | 3/3 | **1/3** | 3/3 |
+| the response keeps the server's paths to itself | yes | **no** | yes |
+
+### What the AI got wrong
+
+**Its PDF walked straight into the page-break trap.** The document is three pages and the column
+headings appear on page one only:
+
+```
+AI version PDF: 3 pages
+  page 1: table header present = True
+  page 2: table header present = False
+  page 3: table header present = False
+```
+
+Pages two and three are a list of titles and numbers with nothing saying which column is the
+price and which is the rating. Neither `display: table-header-group` nor `break-inside: avoid`
+appears anywhere in its code, because neither appeared anywhere in my prompt.
+
+**It ignored an instruction I did give it.** My prompt said, in those words, to return the
+existing report with 200 instead of 201. Both POSTs answered 201:
+
+```
+POST /reports -> {"id":"303c5381", ...}  [201]
+POST /reports -> {"id":"303c5381", ...}  [201]
+```
+
+The rule itself worked: same id, one file. But `status_code=201` is declared once on the route
+decorator, and returning a plain dictionary cannot override it. To answer 200 you have to return
+an explicit response object, and it did not. A caller cannot tell "I made this for you" from
+"you already had one", which is the entire point of the two codes.
+
+**It handed the caller its own filesystem.** `GET /reports/{id}` returned the whole row,
+including the stored path:
+
+```json
+{"id":"303c5381",
+ "path":"/Users/saisrikardevasani/Downloads/FLY/task-api/pdf-report-generator/ai-version/reports/303c5381.pdf",
+ ...}
+```
+
+That tells a caller the operating system, the user's name and the deployment layout, and none of
+it is anything they can use. It also pins the database to one machine: move the folder and every
+stored path is wrong. I had written the same bug and caught it at stage 4, which is the only
+reason I spotted it here so quickly.
+
+**Naive timestamps again.** `datetime.datetime.now()` with no timezone, so `created_at` came back
+as `2026-09-17T12:23:55` for a report generated at 11:23 UTC, and no download filename.
+
+### What the AI did better
+
+**It closed its database connections and I did not.** Every one of its functions ends with
+`conn.close()`. I had written `with connect() as connection:` throughout, which reads like it
+closes and does not: sqlite3's context manager commits or rolls back the transaction and leaves
+the connection open. Checked directly:
+
+```
+after the 'with' block the connection is STILL OPEN: sqlite3's context manager
+manages the transaction, not the connection. It never closes anything.
+```
+
+In practice mine was collected anyway, because the local variable's refcount hits zero when the
+function returns, and a check after a query found zero live connections. So it was not leaking.
+But it was relying on CPython's refcounting to do something my code looked like it was doing
+itself, which is the kind of thing that stops being true on a different runtime or the day
+someone holds a reference. I have made it explicit with a `session()` context manager that
+commits and then closes, and the AI's plain `conn.close()` is what pointed at it.
+
+**It kept the whole thing in one file.** For a service this size that is a defensible call and
+makes it easier to read end to end. Mine is split across `db.py`, `render.py`, `seed.py` and
+`main.py`, which I would still choose, because the SQL and the HTML template are the two parts
+most likely to change and they have no business in the same file. It is a real trade rather than
+a mistake on either side.
+
+### What my prompt forgot to say
+
+1. **The print CSS.** The whole difficulty of turning a long table into a document, and my prompt
+   said "render it to A4" as though that were the hard part. It is not. The hard part is what
+   happens at the page boundary, and I did not mention it because I had already solved it hours
+   earlier and it no longer felt like a decision.
+2. **How to actually return a 200.** I said what the status code should be and not that the
+   decorator's `status_code` wins unless you return a response object. A spec that says what
+   without saying how, on a point the framework makes awkward, gets ignored.
+3. **That paths are internal.** I asked it to store the file path and return "the row", and it
+   did exactly that. I never said which fields the caller should see.
+4. **Timezones and download filenames.** Not mentioned at all, so not done.
+
+### The rematch
+
+[`ai-version/prompt-v2.md`](ai-version/prompt-v2.md) adds those four points. Regenerated once as
+[`report_api_v2.py`](ai-version/report_api_v2.py), and every failing box passes:
+
+```
+POST /reports -> {"id":"c16d393d", ...}  [201]
+POST /reports -> {"id":"c16d393d", ...}  [200]
+
+GET  /reports/c16d393d
+{"id":"c16d393d","created_at":"2026-09-17T11:25:24.888228+00:00",
+ "file":"/reports/c16d393d/file"}
+
+content-disposition: attachment; filename="bookstore-report-2026-09-17.pdf"
+
+3 pages
+  page 1: table header present = True
+  page 2: table header present = True
+  page 3: table header present = True
+```
+
+One sentence on what changed: naming the two CSS rules and the response object fixed every
+defect in one pass, which says the failures were never the model's reasoning, they were four
+sentences missing from my specification.

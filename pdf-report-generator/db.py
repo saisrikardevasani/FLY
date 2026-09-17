@@ -1,5 +1,6 @@
 """Everything that talks to report.db lives here. No SQL anywhere else."""
 
+import contextlib
 import sqlite3
 from pathlib import Path
 
@@ -30,8 +31,23 @@ def connect() -> sqlite3.Connection:
     return connection
 
 
+@contextlib.contextmanager
+def session():
+    """Commit on the way out, and actually close the connection.
+
+    sqlite3's own context manager handles the transaction and leaves the connection
+    open. CPython's refcounting usually tidies it up, but relying on that is implicit.
+    """
+    connection = connect()
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
+
+
 def init() -> None:
-    with connect() as connection:
+    with session() as connection:
         connection.executescript(SCHEMA)
 
 
@@ -65,7 +81,7 @@ def get_report_data(min_rating: int = 1) -> dict:
 
     min_rating is bound as a parameter, never formatted into the SQL string.
     """
-    with connect() as connection:
+    with session() as connection:
         def rows(sql):
             return [dict(row) for row in connection.execute(sql, (min_rating,)).fetchall()]
 
@@ -82,7 +98,7 @@ def get_report_data(min_rating: int = 1) -> dict:
 
 
 def save_report(report_id: str, path: str, created_at: str, min_rating: int = 1) -> None:
-    with connect() as connection:
+    with session() as connection:
         connection.execute(
             "INSERT INTO reports (id, path, created_at, min_rating) VALUES (?, ?, ?, ?)",
             (report_id, path, created_at, min_rating),
@@ -90,7 +106,7 @@ def save_report(report_id: str, path: str, created_at: str, min_rating: int = 1)
 
 
 def get_report(report_id: str) -> dict | None:
-    with connect() as connection:
+    with session() as connection:
         row = connection.execute(
             "SELECT id, path, created_at FROM reports WHERE id = ?", (report_id,)
         ).fetchone()
@@ -103,7 +119,7 @@ def report_made_on(day: str, min_rating: int = 1) -> dict | None:
     A report of four-star books is a different report from one of every book, so the
     once-a-day rule is per filter rather than per day.
     """
-    with connect() as connection:
+    with session() as connection:
         row = connection.execute(
             "SELECT id, path, created_at FROM reports "
             "WHERE date(created_at) = ? AND min_rating = ? ORDER BY created_at LIMIT 1",
@@ -113,7 +129,7 @@ def report_made_on(day: str, min_rating: int = 1) -> dict | None:
 
 
 def list_reports() -> list[dict]:
-    with connect() as connection:
+    with session() as connection:
         rows = connection.execute(
             "SELECT id, created_at, min_rating FROM reports ORDER BY created_at DESC"
         ).fetchall()
