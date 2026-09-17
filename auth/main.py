@@ -8,7 +8,8 @@ import contextlib
 import os
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field
@@ -132,32 +133,29 @@ async def public_info() -> dict:
     return {"message": "Welcome stranger! This info is public."}
 
 
-def token_from(authorization: str | None) -> str:
-    """Pull the token out of an Authorization header, or refuse the request.
+# Declaring the scheme is what puts the padlock on the protected routes in Swagger and
+# gives the Authorize button somewhere to put a token. auto_error=False so that a missing
+# header produces this file's error shape rather than FastAPI's.
+bearer = HTTPBearer(
+    auto_error=False,
+    description="Paste the access_token returned by POST /auth/login.",
+)
 
-    The header has to be exactly "Bearer <token>". A bare token with no scheme, or a
-    scheme with nothing after it, is malformed and gets the same 401 as no header at all.
+
+def current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+) -> dict:
+    """One guard, standing at every locked door.
+
+    Copy-pasting this check into each route is how a door ends up unguarded: miss one and
+    nothing tells you. Every protected route depends on this function instead, so adding a
+    route adds no auth code at all.
     """
-    if not authorization:
+    if credentials is None or not credentials.credentials.strip():
         raise HTTPException(status_code=401, detail="Access token required")
-
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token.strip():
-        raise HTTPException(status_code=401, detail="Access token required")
-    return token.strip()
-
-
-@app.get("/protected/profile")
-async def profile(authorization: str | None = Header(default=None)) -> dict:
-    """The guard inspects the pass, and turns away forgeries.
-
-    Verification is a network call to Supabase rather than a local check, which is the
-    point: this server cannot be talked into accepting a token Supabase would reject.
-    """
-    token = token_from(authorization)
 
     try:
-        result = supabase.auth.get_user(token)
+        result = supabase.auth.get_user(credentials.credentials.strip())
     except AuthApiError as exc:
         raise HTTPException(401, "Invalid or expired token") from exc
 
@@ -165,3 +163,22 @@ async def profile(authorization: str | None = Header(default=None)) -> dict:
         raise HTTPException(401, "Invalid or expired token")
 
     return safe_user(result.user)
+
+
+@app.get("/protected/profile")
+async def profile(user: dict = Depends(current_user)) -> dict:
+    """The route body only runs once the guard has verified the user."""
+    return user
+
+
+@app.get("/protected/dashboard")
+async def dashboard(user: dict = Depends(current_user)) -> dict:
+    """A second locked door, and not one line of new auth code. That reuse is the point."""
+    return {"message": f"Welcome back, {user['email']}.", "user": user}
+
+
+@app.post("/auth/logout", status_code=204)
+async def logout(user: dict = Depends(current_user)) -> Response:
+    """Protected: you have to prove who you are before you can stop being them."""
+    supabase.auth.sign_out()
+    return Response(status_code=204)
