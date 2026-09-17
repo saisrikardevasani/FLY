@@ -8,7 +8,7 @@ import contextlib
 import os
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field
@@ -125,3 +125,35 @@ async def login(body: Credentials) -> dict:
         "user": safe_user(result.user),
     }
 
+
+@app.get("/public/info")
+async def public_info() -> dict:
+    """The lobby. No token, no questions."""
+    return {"message": "Welcome stranger! This info is public."}
+
+
+def token_from(authorization: str | None) -> str:
+    """Pull the token out of an Authorization header, or refuse the request.
+
+    The header has to be exactly "Bearer <token>". A bare token with no scheme, or a
+    scheme with nothing after it, is malformed and gets the same 401 as no header at all.
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Access token required")
+
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(status_code=401, detail="Access token required")
+    return token.strip()
+
+
+@app.get("/protected/profile")
+async def profile(authorization: str | None = Header(default=None)) -> dict:
+    """The locked door, with no guard behind it yet.
+
+    Stage 2 only checks that a token was presented. Stage 3 asks Supabase whether it is
+    real, which is a different question and the one that matters.
+    """
+    token = token_from(authorization)
+    return {"message": "A token was presented, but nobody has checked it yet.",
+            "token_length": len(token)}
